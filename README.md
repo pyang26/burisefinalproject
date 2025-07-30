@@ -1,3 +1,1 @@
 # burisefinalproject\
-
-hello world
