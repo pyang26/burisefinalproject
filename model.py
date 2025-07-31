@@ -61,7 +61,6 @@ class DopamineCenteredProcessor:
     def __init__(self, state_dim: int = 8):
         self.rpe_computer = DopamineCenteredRPE(state_dim)
         self.state_dim = state_dim
-        
         # Temporal difference learning parameters
         self.gamma = 0.9  # Discount factor
         self.eta = 0.1    # Learning rate
@@ -102,11 +101,9 @@ class DopamineCenteredProcessor:
             actual_reward = 0.5
         else:
             actual_reward = 0.3
-        
-        # Enhanced dopamine-expected reward relationship
+
         # Based on sigmoidal response curve from dopamine to expected reward
         # E(R) = R_max * (DA^n / (K^n + DA^n)) where DA = dopamine level
-        
         R_max = actual_reward * 4.0  # Increased maximum expected reward
         K = 0.3  # Lower half-saturation constant (more sensitive to dopamine)
         n = 3.0  # Higher Hill coefficient (steeper response)
