@@ -1,0 +1,8 @@
+./girk.c: ../girk.mod
+	@printf " -> $(C_GREEN)NMODL$(C_RESET) $<\\n"
+	(cd "..";  MODLUNIT=$(NRNUNITS) $(NOCMODL) "girk.mod" -o "/Users/peteryang/Documents/GitHub/burisefinalproject/arm64")
+
+./girk.o: ./girk.c
+	@printf " -> $(C_GREEN)Compiling$(C_RESET) $<\\n"
+	$(COMPILE) -I".." $(INCLUDES) -fPIC -c $< -o $@
+
