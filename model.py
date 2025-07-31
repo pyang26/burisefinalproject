@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 from enum import Enum
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
-import random
 
 class DopamineScenario(Enum):
     #different simulated dopamine scenarios
@@ -108,7 +107,6 @@ class DopamineCenteredProcessor:
         # Based on sigmoidal response curve from dopamine to expected reward
         # E(R) = R_max * (DA^n / (K^n + DA^n)) where DA = dopamine level
         
-        # Parameters for stronger sigmoidal relationship
         R_max = actual_reward * 4.0  # Increased maximum expected reward
         K = 0.3  # Lower half-saturation constant (more sensitive to dopamine)
         n = 3.0  # Higher Hill coefficient (steeper response)
@@ -210,11 +208,11 @@ class DopamineCenteredProcessor:
         
         steps = range(len(self.rpe_history))
         
-        # 1. Dopamine input over time (THE DRIVER)
+        # 1. Dopamine input over time
         ax1.plot(steps, self.dopamine_history, 'purple', linewidth=3)
-        ax1.set_title('Dopamine Input (THE DRIVER)', fontweight='bold')
-        ax1.set_xlabel('Step')
-        ax1.set_ylabel('Dopamine Level')
+        ax1.set_title('Dopamine Input', fontweight='bold')
+        ax1.set_xlabel('Time Step')
+        ax1.set_ylabel('Dopamine Level (arbitrary units)')
         ax1.grid(True, alpha=0.3)
         ax1.set_ylim(0, 1)
         
@@ -222,8 +220,8 @@ class DopamineCenteredProcessor:
         ax2.plot(steps, self.actual_rewards, 'g-', linewidth=2, label='Actual Reward (Environment)')
         ax2.plot(steps, self.expected_rewards, 'b--', linewidth=2, label='Expected Reward (Dopamine)')
         ax2.set_title('Actual vs Expected Rewards', fontweight='bold')
-        ax2.set_xlabel('Step')
-        ax2.set_ylabel('Reward Value')
+        ax2.set_xlabel('Time Step')
+        ax2.set_ylabel('Reward Value (arbitrary units)')
         ax2.legend()
         ax2.grid(True, alpha=0.3)
         ax2.axhline(y=0, color='k', linestyle='--', alpha=0.5)
@@ -231,8 +229,8 @@ class DopamineCenteredProcessor:
         # 3. RPE over time
         ax3.plot(steps, self.rpe_history, 'r-', linewidth=2)
         ax3.set_title('RPE Over Time', fontweight='bold')
-        ax3.set_xlabel('Step')
-        ax3.set_ylabel('RPE')
+        ax3.set_xlabel('Time Step')
+        ax3.set_ylabel('RPE (arbitrary units)')
         ax3.grid(True, alpha=0.3)
         ax3.axhline(y=0, color='k', linestyle='--', alpha=0.5)
         
@@ -242,7 +240,7 @@ class DopamineCenteredProcessor:
         # Plot dopamine on primary axis
         line1 = ax4.plot(steps, self.dopamine_history, 'purple', linewidth=3, label='Dopamine Input')
         ax4.set_xlabel('Time Step')
-        ax4.set_ylabel('Dopamine Level', color='purple')
+        ax4.set_ylabel('Dopamine Level (arbitrary units)', color='purple')
         ax4.tick_params(axis='y', labelcolor='purple')
         ax4.grid(True, alpha=0.3)
         ax4.set_ylim(0, 1)
@@ -264,7 +262,6 @@ class DopamineCenteredProcessor:
         plt.tight_layout()
         plt.show()
         
-        # Print focused analysis
         self._print_dopamine_correlation_analysis(scenario)
     
     def _print_dopamine_correlation_analysis(self, scenario: DopamineScenario):
@@ -310,9 +307,6 @@ def run_dopamine_centered_experiments():
         results = processor.run_dopamine_experiment(scenario, num_steps=500)
         # Plot dopamine correlation analysis
         processor.plot_dopamine_correlation_analysis(scenario)
-    print("\n" + "="*60)
-    print("Dopamine-centered experiments complete!")
-    print("="*60)
 
 if __name__ == "__main__":
     run_dopamine_centered_experiments() 
