@@ -62,45 +62,82 @@ class DopamineCenteredProcessor:
     def __init__(self, state_dim: int = 8):
         self.rpe_computer = DopamineCenteredRPE(state_dim)
         self.state_dim = state_dim
+        
+        # Temporal difference learning parameters
+        self.gamma = 0.9  # Discount factor
+        self.eta = 0.1    # Learning rate
+        
+        # State value tracking
+        self.current_state_value = 0.0
+        self.next_state_value = 0.0
+        
         # Processing history - track all components
         self.actual_rewards = []
         self.expected_rewards = []
         self.rpe_history = []
         self.dopamine_history = []
+        self.state_values = []
         
     def generate_dopamine_scenario(self, scenario: DopamineScenario, step: int) -> DopamineInput:
+        # More continuous time progression with smaller increments
+        time_factor = step * 0.02  
         if scenario == DopamineScenario.HIGH_DOPAMINE:
-            level = 0.8 + 0.2 * np.sin(step * 0.1)
+            level = 0.8 + 0.2 * np.sin(time_factor)
         elif scenario == DopamineScenario.LOW_DOPAMINE:
-            level = 0.2 + 0.1 * np.sin(step * 0.1)
+            level = 0.2 + 0.1 * np.sin(time_factor)
         elif scenario == DopamineScenario.NORMAL_DOPAMINE:
-            level = 0.5 + 0.1 * np.sin(step * 0.1)
+            level = 0.5 + 0.1 * np.sin(time_factor)
         elif scenario == DopamineScenario.VARIABLE_DOPAMINE:
-            level = 0.3 + 0.4 * np.sin(step * 0.3)
+            level = 0.3 + 0.4 * np.sin(time_factor * 1.5)
         elif scenario == DopamineScenario.DEPLETED_DOPAMINE:
-            level = 0.1 + 0.05 * np.sin(step * 0.1)
+            level = 0.1 + 0.05 * np.sin(time_factor)
         else:
             level = 0.5
         return DopamineInput(level=level, scenario=scenario, timestamp=step)
     
-    def generate_rewards_from_dopamine(self, dopamine_input: DopamineInput, step: int) -> RewardData:
+    def generate_rewards_from_dopamine(self, dopamine_input: DopamineInput, step: int, rpe_history: List[float] = None) -> RewardData:
         # Generate actual reward from environment (external) with slight oscillation
-        # Expected rewards are influenced by dopamine (internal predictions)
+        # Expected rewards are influenced by dopamine (internal predictions) and previous RPEs
         
-        # Generate actual reward from environment - with slight oscillation
-        base_reward = 0.5
-        oscillation = 0.05 * np.sin(step * 0.2)  # Small oscillation
-        actual_reward = base_reward + oscillation
+        if step <= 250:
+            actual_reward = 0.5
+        else:
+            actual_reward = 0.3
         
-        # Generate expected reward based on dopamine level (dopamine affects predictions)
-        if dopamine_input.level > 0.7:  # High dopamine → very optimistic predictions
-            expected_reward = actual_reward * 4.0 + 3.0 + dopamine_input.level * 4.0
-        elif dopamine_input.level > 0.4:  # Medium dopamine → realistic predictions
-            expected_reward = actual_reward * 2.7 + 1.0 + dopamine_input.level * 2.5
-        elif dopamine_input.level > 0.2:  # Low dopamine → pessimistic predictions
-            expected_reward = actual_reward * 0.8 - 1.5 + dopamine_input.level * 1.0  
-        else:  # Very low dopamine → very pessimistic predictions
-            expected_reward = actual_reward * 0.2 - 3.0 + dopamine_input.level * 0.5 
+        # Enhanced dopamine-expected reward relationship
+        # Based on sigmoidal response curve from dopamine to expected reward
+        # E(R) = R_max * (DA^n / (K^n + DA^n)) where DA = dopamine level
+        
+        # Parameters for stronger sigmoidal relationship
+        R_max = actual_reward * 4.0  # Increased maximum expected reward
+        K = 0.3  # Lower half-saturation constant (more sensitive to dopamine)
+        n = 3.0  # Higher Hill coefficient (steeper response)
+        
+        # Enhanced sigmoidal dopamine response: E(R) = R_max * (DA^n / (K^n + DA^n))
+        dopamine_response = (dopamine_input.level ** n) / (K ** n + dopamine_input.level ** n)
+        base_expected = R_max * dopamine_response
+        
+        # Temporal difference RPE calculation with dopamine modulation
+        # δt = rt + γV(St+1) - V(St)
+        
+        # Calculate temporal difference RPE
+        td_rpe = actual_reward + self.gamma * self.next_state_value - self.current_state_value
+        
+        # Dopamine modulates the RPE calculation
+        # Higher dopamine → enhanced RPE sensitivity
+        # Lower dopamine → reduced RPE sensitivity
+        dopamine_modulation = 1.0 + dopamine_input.level * 0.5  # 1.0 to 1.5 range
+        modulated_td_rpe = td_rpe * dopamine_modulation
+        
+        # Update state value using temporal difference learning
+        # V(St)new = V(St)old + η * δt
+        self.current_state_value = self.current_state_value + self.eta * modulated_td_rpe
+        
+        # Use temporal difference RPE for expected reward adjustment
+        rpe_adjustment = modulated_td_rpe * 0.3  # Scale down for stability
+        
+        # Final expected reward: sigmoidal dopamine response + TD RPE learning
+        expected_reward = base_expected + rpe_adjustment 
         
         return RewardData(
             actual_reward=actual_reward,
@@ -110,15 +147,29 @@ class DopamineCenteredProcessor:
     
     def process_dopamine_step(self, dopamine_input: DopamineInput) -> Dict:
         # Generate rewards and expectations from dopamine input
-        reward_data = self.generate_rewards_from_dopamine(dopamine_input, dopamine_input.timestamp)
-        # Compute RPE using dopamine and reward
-        rpe, expected_reward = self.rpe_computer.compute_rpe(dopamine_input, reward_data)
+        reward_data = self.generate_rewards_from_dopamine(dopamine_input, dopamine_input.timestamp, self.rpe_history)
+        
+        # Update next state value (simulate environment transition)
+        self.next_state_value = self.current_state_value + np.random.normal(0, 0.1)  # Small random change
+        
+        # Compute temporal difference RPE with dopamine modulation
+        td_rpe = reward_data.actual_reward + self.gamma * self.next_state_value - self.current_state_value
+        dopamine_modulation = 1.0 + dopamine_input.level * 0.5
+        modulated_td_rpe = td_rpe * dopamine_modulation
+        
+        # Update state value using temporal difference learning
+        self.current_state_value = self.current_state_value + self.eta * modulated_td_rpe
+        
+        # Use temporal difference RPE as the main RPE
+        rpe = modulated_td_rpe
+        expected_reward = reward_data.expected_reward
         
         # Record history
         self.actual_rewards.append(reward_data.actual_reward)
         self.expected_rewards.append(expected_reward)
         self.rpe_history.append(rpe)
         self.dopamine_history.append(dopamine_input.level)
+        self.state_values.append(self.current_state_value)
         
         return {
             'actual_reward': reward_data.actual_reward,
@@ -127,7 +178,7 @@ class DopamineCenteredProcessor:
             'dopamine_level': dopamine_input.level
         }
     
-    def run_dopamine_experiment(self, scenario: DopamineScenario, num_steps: int = 100) -> Dict:
+    def run_dopamine_experiment(self, scenario: DopamineScenario, num_steps: int = 500) -> Dict:
         experiment_results = []
         
         for step in range(num_steps):
@@ -137,7 +188,7 @@ class DopamineCenteredProcessor:
             result = self.process_dopamine_step(dopamine_input)
             experiment_results.append(result)
             
-            if step % 20 == 0:
+            if step % 100 == 0:
                 print(f"Step {step}: DA={dopamine_input.level:.3f}, "
                       f"Actual={result['actual_reward']:.3f}, "
                       f"Expected={result['expected_reward']:.3f}, "
@@ -149,15 +200,13 @@ class DopamineCenteredProcessor:
             print("No data to plot.")
             return
         
-        fig = plt.figure(figsize=(16, 10))
+        fig = plt.figure(figsize=(12, 8))
         
-        # Group 1: Dopamine-driven components (2x3)
-        ax1 = plt.subplot(2, 3, 1)
-        ax2 = plt.subplot(2, 3, 2)
-        ax3 = plt.subplot(2, 3, 3)
-        ax4 = plt.subplot(2, 3, 4)
-        ax5 = plt.subplot(2, 3, 5)
-        ax6 = plt.subplot(2, 3, 6)
+        # Group 1: Dopamine-driven components (2x2)
+        ax1 = plt.subplot(2, 2, 1)
+        ax2 = plt.subplot(2, 2, 2)
+        ax3 = plt.subplot(2, 2, 3)
+        ax4 = plt.subplot(2, 2, 4)
         
         steps = range(len(self.rpe_history))
         
@@ -187,32 +236,16 @@ class DopamineCenteredProcessor:
         ax3.grid(True, alpha=0.3)
         ax3.axhline(y=0, color='k', linestyle='--', alpha=0.5)
         
-        # 4. KEY: Dopamine vs RPE correlation
-        ax4.scatter(self.dopamine_history, self.rpe_history, alpha=0.6, s=30, color='orange')
-        ax4.set_title('Dopamine Input vs RPE Output', fontweight='bold')
-        ax4.set_xlabel('Dopamine Level')
-        ax4.set_ylabel('RPE')
-        ax4.grid(True, alpha=0.3)
-        ax4.axhline(y=0, color='k', linestyle='--', alpha=0.5)
-        
-        # 5. Dopamine vs Actual Reward correlation
-        ax5.scatter(self.dopamine_history, self.actual_rewards, alpha=0.6, s=30, color='green')
-        ax5.set_title('Dopamine vs Actual Reward', fontweight='bold')
-        ax5.set_xlabel('Dopamine Level')
-        ax5.set_ylabel('Actual Reward')
-        ax5.grid(True, alpha=0.3)
-        ax5.axhline(y=0, color='k', linestyle='--', alpha=0.5)
-        
-        # 6. Temporal alignment: Dopamine → Rewards → RPE
-        ax_twin = ax6.twinx()
+        # 4. Temporal alignment: Dopamine → Rewards → RPE
+        ax_twin = ax4.twinx()
         
         # Plot dopamine on primary axis
-        line1 = ax6.plot(steps, self.dopamine_history, 'purple', linewidth=3, label='Dopamine Input')
-        ax6.set_xlabel('Time Step')
-        ax6.set_ylabel('Dopamine Level', color='purple')
-        ax6.tick_params(axis='y', labelcolor='purple')
-        ax6.grid(True, alpha=0.3)
-        ax6.set_ylim(0, 1)
+        line1 = ax4.plot(steps, self.dopamine_history, 'purple', linewidth=3, label='Dopamine Input')
+        ax4.set_xlabel('Time Step')
+        ax4.set_ylabel('Dopamine Level', color='purple')
+        ax4.tick_params(axis='y', labelcolor='purple')
+        ax4.grid(True, alpha=0.3)
+        ax4.set_ylim(0, 1)
         
         # Plot RPE on secondary axis
         line2 = ax_twin.plot(steps, self.rpe_history, 'r-', linewidth=2, label='RPE Output')
@@ -220,12 +253,12 @@ class DopamineCenteredProcessor:
         ax_twin.tick_params(axis='y', labelcolor='r')
         ax_twin.axhline(y=0, color='k', linestyle='--', alpha=0.5)
         
-        ax6.set_title('Dopamine Input → RPE Output', fontweight='bold')
+        ax4.set_title('Dopamine Input → RPE Output', fontweight='bold')
         
         # Add legend
         lines = line1 + line2
         labels = [l.get_label() for l in lines]
-        ax6.legend(lines, labels, loc='upper right')
+        ax4.legend(lines, labels, loc='upper right')
         
         plt.suptitle(f'Dopamine-Centered Reward Processing: {scenario.value.upper()}', fontsize=16, fontweight='bold')
         plt.tight_layout()
@@ -241,29 +274,14 @@ class DopamineCenteredProcessor:
         print(f"Scenario: {scenario.value.upper()}")
         print("="*60)
         
-        print(f"\n1. Overall Statistics:")
+        print(f"Overall Statistics:")
         print(f"   Total steps: {len(self.rpe_history)}")
         print(f"   Average dopamine level: {np.mean(self.dopamine_history):.3f}")
         print(f"   Average actual reward: {np.mean(self.actual_rewards):.3f}")
         print(f"   Average expected reward: {np.mean(self.expected_rewards):.3f}")
         print(f"   Average RPE: {np.mean(self.rpe_history):.3f}")
-        
-        print(f"\n2. KEY: Dopamine-RPE Correlation:")
-        dopamine_rpe_corr = np.corrcoef(self.dopamine_history, self.rpe_history)[0, 1]
-        print(f"   Dopamine ↔ RPE correlation: {dopamine_rpe_corr:.3f}")
-        
-        if dopamine_rpe_corr > 0.3:
-            print("✅ Strong positive correlation: Higher dopamine → Higher RPE")
-        elif dopamine_rpe_corr > 0.1:
-            print("⚠️  Moderate correlation: Some dopamine-RPE relationship")
-        else:
-            print("❌ Weak correlation: Limited dopamine-RPE relationship")
-            
-        print(f"\n3. Dopamine-Reward Correlation:")
-        dopamine_reward_corr = np.corrcoef(self.dopamine_history, self.actual_rewards)[0, 1]
-        print(f"   Dopamine ↔ Actual reward correlation: {dopamine_reward_corr:.3f}")
 
-        print(f"\n4. RPE Analysis:")
+        print(f"RPE Analysis:")
         positive_rpe = [rpe for rpe in self.rpe_history if rpe > 0]
         negative_rpe = [rpe for rpe in self.rpe_history if rpe < 0]
         print(f"   Positive RPE events: {len(positive_rpe)}")
@@ -289,7 +307,7 @@ def run_dopamine_centered_experiments():
         # Create new processor for each scenario
         processor = DopamineCenteredProcessor(state_dim=8)
         # Run experiment with dopamine as ONLY input
-        results = processor.run_dopamine_experiment(scenario, num_steps=100)
+        results = processor.run_dopamine_experiment(scenario, num_steps=500)
         # Plot dopamine correlation analysis
         processor.plot_dopamine_correlation_analysis(scenario)
     print("\n" + "="*60)
