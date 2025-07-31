@@ -1,0 +1,749 @@
+from neuron import h
+import numpy as np
+from neuron.units import ms, mV
+
+# RL model imports  
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+import random
+
+# Initialize NEURON
+h.load_file('stdrun.hoc')
+np.random.seed(42)
+torch.manual_seed(42)
+
+class OpioidScenario(Enum):
+    """Different opioid exposure scenarios"""
+    NO_OPIOID = "no_opioid"
+    LOW_DOSE = "low_dose"
+    MODERATE_DOSE = "moderate_dose"
+    HIGH_DOSE = "high_dose"
+    CHRONIC_EXPOSURE = "chronic_exposure"
+
+@dataclass
+class BiophysicalOutput:
+    """Output from the biophysical NEURON simulation"""
+    dopamine_firing_rate: float
+    gaba_firing_rate: float
+    baseline_dopamine: float
+    opioid_dopamine: float
+    dopamine_response: float
+    opioid_dose: float
+    time_course: np.ndarray
+    dopamine_trace: np.ndarray
+
+@dataclass
+class RewardData:
+    """Reward data for RL processing"""
+    actual_reward: float
+    expected_reward: float
+    timestamp: int
+
+class IntegratedOpioidModel:
+    """
+    Main class that integrates biophysical and RL models
+    """
+    def __init__(self, mor_sensitivity=1.0):
+        self.mor_sensitivity = mor_sensitivity
+        
+        # Biophysical model components
+        self.biophysical_model = BiophysicalMORSimulation(mor_sensitivity)
+        
+        # RL model components
+        self.rl_model = DopamineCenteredProcessor()
+        
+        # Integration parameters
+        self.dopamine_scale_factor = 0.01  # Scale firing rate to 0-1 range
+        self.time_window = 500  # ms simulation time
+        
+        # Results storage
+        self.integrated_results = {}
+        
+    def run_integrated_simulation(self, opioid_scenario: OpioidScenario, 
+                                num_rl_steps: int = 100) -> Dict:
+        """
+        Run the complete integrated simulation:
+        1. Biophysical simulation generates dopamine dynamics
+        2. RL model processes dopamine-driven reward prediction
+        """
+        
+        print(f"\n=== INTEGRATED SIMULATION: {opioid_scenario.value.upper()} ===")
+        
+        # Step 1: Run biophysical simulation
+        print("1. Running biophysical simulation...")
+        opioid_dose = self._scenario_to_dose(opioid_scenario)
+        bio_results = self.biophysical_model.run_simulation(
+            opioid_dose=opioid_dose, 
+            duration=self.time_window
+        )
+        
+        # Step 2: Extract dopamine dynamics for RL model
+        print("2. Extracting dopamine dynamics...")
+        dopamine_dynamics = self._extract_dopamine_dynamics(bio_results)
+        
+        # Step 3: Run RL simulation with biophysical dopamine input
+        print("3. Running RL simulation with biophysical dopamine...")
+        rl_results = self.rl_model.run_biophysical_dopamine_experiment(
+            dopamine_dynamics, num_rl_steps
+        )
+        
+        # Step 4: Integrate and analyze results
+        print("4. Integrating results...")
+        integrated_results = self._integrate_results(bio_results, rl_results, opioid_scenario)
+        
+        # Store results
+        self.integrated_results[opioid_scenario] = integrated_results
+        
+        return integrated_results
+    
+    def _scenario_to_dose(self, scenario: OpioidScenario) -> float:
+        """Convert opioid scenario to biophysical dose parameter"""
+        dose_mapping = {
+            OpioidScenario.NO_OPIOID: 0.0,
+            OpioidScenario.LOW_DOSE: 0.5,
+            OpioidScenario.MODERATE_DOSE: 1.0,
+            OpioidScenario.HIGH_DOSE: 2.0,
+            OpioidScenario.CHRONIC_EXPOSURE: 2.5
+        }
+        return dose_mapping[scenario]
+    
+    def _extract_dopamine_dynamics(self, bio_results: Dict) -> np.ndarray:
+        """Extract dopamine dynamics from biophysical simulation"""
+        
+        # Get VTA dopamine firing over time
+        time = bio_results['time']
+        vta_spikes = bio_results['vta_spikes']
+        
+        # Convert spike times to continuous dopamine signal
+        dopamine_signal = np.zeros_like(time)
+        
+        if len(vta_spikes) > 0:
+            # Create continuous dopamine signal from spikes
+            for spike_time in vta_spikes:
+                # Find closest time index
+                spike_idx = np.argmin(np.abs(time - spike_time))
+                # Add dopamine release with decay
+                for i in range(spike_idx, min(len(time), spike_idx + 50)):
+                    decay = np.exp(-(i - spike_idx) * 0.1)
+                    dopamine_signal[i] += 0.1 * decay
+        
+        # Normalize to 0-1 range
+        if np.max(dopamine_signal) > 0:
+            dopamine_signal = dopamine_signal / np.max(dopamine_signal)
+        
+        # Add baseline dopamine level
+        baseline = 0.3 + bio_results['baseline_vta_rate'] * self.dopamine_scale_factor
+        dopamine_signal += baseline
+        dopamine_signal = np.clip(dopamine_signal, 0, 1)
+        
+        return dopamine_signal
+    
+    def _integrate_results(self, bio_results: Dict, rl_results: List[Dict], 
+                          scenario: OpioidScenario) -> Dict:
+        """Integrate biophysical and RL results"""
+        
+        return {
+            'scenario': scenario,
+            'biophysical': bio_results,
+            'rl_processing': rl_results,
+            'integration_metrics': {
+                'avg_dopamine_level': np.mean([r['dopamine_level'] for r in rl_results]),
+                'avg_rpe': np.mean([r['rpe'] for r in rl_results]),
+                'rpe_variance': np.var([r['rpe'] for r in rl_results]),
+                'dopamine_rpe_correlation': np.corrcoef(
+                    [r['dopamine_level'] for r in rl_results],
+                    [r['rpe'] for r in rl_results]
+                )[0, 1] if len(rl_results) > 1 else 0,
+                'vta_firing_change': bio_results['vta_response'],
+                'gaba_firing_change': bio_results['gaba_response']
+            }
+        }
+    
+    def plot_integrated_results(self, scenario: OpioidScenario):
+        """Plot comprehensive integrated results"""
+        
+        if scenario not in self.integrated_results:
+            print(f"No results found for {scenario}")
+            return
+            
+        results = self.integrated_results[scenario]
+        bio_results = results['biophysical']
+        rl_results = results['rl_processing']
+        
+        fig = plt.figure(figsize=(18, 12))
+        
+        # Top row: Biophysical results
+        ax1 = plt.subplot(3, 3, 1)
+        ax2 = plt.subplot(3, 3, 2)
+        ax3 = plt.subplot(3, 3, 3)
+        
+        # Middle row: RL processing results
+        ax4 = plt.subplot(3, 3, 4)
+        ax5 = plt.subplot(3, 3, 5)
+        ax6 = plt.subplot(3, 3, 6)
+        
+        # Bottom row: Integration analysis
+        ax7 = plt.subplot(3, 3, 7)
+        ax8 = plt.subplot(3, 3, 8)
+        ax9 = plt.subplot(3, 3, 9)
+        
+        # === BIOPHYSICAL RESULTS ===
+        
+        # 1. VTA Dopamine neuron activity
+        t_bio = bio_results['time']
+        vta_v = bio_results['vta_voltage']
+        ax1.plot(t_bio, vta_v, 'r-', linewidth=1.5)
+        ax1.axvline(200, color='purple', linestyle='--', alpha=0.7, label='Opioid Onset')
+        ax1.set_title('VTA Dopamine Neuron')
+        ax1.set_ylabel('Voltage (mV)')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        
+        # 2. GABA interneuron activity
+        gaba_v = bio_results['gaba_voltage']
+        ax2.plot(t_bio, gaba_v, 'orange', linewidth=1.5)
+        ax2.axvline(200, color='purple', linestyle='--', alpha=0.7)
+        ax2.set_title('GABA Interneuron (MOR Target)')
+        ax2.set_ylabel('Voltage (mV)')
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. Dopamine firing rate over time
+        vta_spikes = bio_results['vta_spikes']
+        time_bins = np.arange(0, 500, 25)
+        firing_rates = []
+        for i in range(len(time_bins)-1):
+            start, end = time_bins[i], time_bins[i+1]
+            spike_count = np.sum((vta_spikes >= start) & (vta_spikes < end))
+            firing_rates.append(spike_count / 0.025)
+        
+        bin_centers = time_bins[:-1] + 12.5
+        ax3.plot(bin_centers, firing_rates, 'r-', linewidth=2)
+        ax3.axvline(200, color='purple', linestyle='--', alpha=0.7)
+        ax3.set_title('VTA Dopamine Firing Rate')
+        ax3.set_ylabel('Firing Rate (Hz)')
+        ax3.grid(True, alpha=0.3)
+        
+        # === RL PROCESSING RESULTS ===
+        
+        rl_steps = range(len(rl_results))
+        dopamine_levels = [r['dopamine_level'] for r in rl_results]
+        actual_rewards = [r['actual_reward'] for r in rl_results]
+        expected_rewards = [r['expected_reward'] for r in rl_results]
+        rpes = [r['rpe'] for r in rl_results]
+        
+        # 4. Dopamine input to RL model
+        ax4.plot(rl_steps, dopamine_levels, 'purple', linewidth=2)
+        ax4.set_title('Dopamine Input to RL Model')
+        ax4.set_ylabel('Dopamine Level')
+        ax4.grid(True, alpha=0.3)
+        
+        # 5. Reward processing
+        ax5.plot(rl_steps, actual_rewards, 'g-', linewidth=2, label='Actual Reward')
+        ax5.plot(rl_steps, expected_rewards, 'b--', linewidth=2, label='Expected Reward')
+        ax5.set_title('Reward Processing')
+        ax5.set_ylabel('Reward Value')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+        
+        # 6. Reward Prediction Error
+        ax6.plot(rl_steps, rpes, 'red', linewidth=2)
+        ax6.axhline(0, color='black', linestyle='--', alpha=0.5)
+        ax6.set_title('Reward Prediction Error')
+        ax6.set_ylabel('RPE')
+        ax6.grid(True, alpha=0.3)
+        
+        # === INTEGRATION ANALYSIS ===
+        
+        # 7. Dopamine-RPE correlation
+        ax7.scatter(dopamine_levels, rpes, alpha=0.6, s=30, color='orange')
+        ax7.set_title('Dopamine vs RPE Correlation')
+        ax7.set_xlabel('Dopamine Level')
+        ax7.set_ylabel('RPE')
+        ax7.grid(True, alpha=0.3)
+        
+        # Add correlation coefficient
+        corr = results['integration_metrics']['dopamine_rpe_correlation']
+        ax7.text(0.05, 0.95, f'r = {corr:.3f}', transform=ax7.transAxes, 
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        
+        # 8. Summary metrics
+        metrics = results['integration_metrics']
+        metric_names = ['Avg DA Level', 'Avg RPE', 'RPE Variance', 'DA-RPE Corr', 
+                       'VTA Response', 'GABA Response']
+        metric_values = [
+            metrics['avg_dopamine_level'],
+            metrics['avg_rpe'], 
+            metrics['rpe_variance'],
+            metrics['dopamine_rpe_correlation'],
+            metrics['vta_firing_change'],
+            metrics['gaba_firing_change']
+        ]
+        
+        bars = ax8.bar(range(len(metric_names)), metric_values, 
+                      color=['purple', 'red', 'orange', 'blue', 'green', 'brown'])
+        ax8.set_title('Integration Metrics Summary')
+        ax8.set_xticks(range(len(metric_names)))
+        ax8.set_xticklabels(metric_names, rotation=45, ha='right')
+        ax8.grid(True, alpha=0.3, axis='y')
+        
+        # 9. Time-aligned comparison
+        # Downsample biophysical data to match RL steps
+        bio_time_normalized = np.linspace(0, 1, len(t_bio))
+        rl_time_normalized = np.linspace(0, 1, len(rl_steps))
+        
+        # Interpolate VTA firing to RL time points
+        vta_interpolated = np.interp(rl_time_normalized, bio_time_normalized, 
+                                   np.array(firing_rates + [firing_rates[-1]] * (len(t_bio) - len(firing_rates))))
+        
+        ax_twin = ax9.twinx()
+        line1 = ax9.plot(rl_steps, dopamine_levels, 'purple', linewidth=2, label='RL Dopamine Input')
+        line2 = ax_twin.plot(rl_steps, rpes, 'red', linewidth=2, label='RPE Output')
+        
+        ax9.set_xlabel('Time Step')
+        ax9.set_ylabel('Dopamine Level', color='purple')
+        ax_twin.set_ylabel('RPE', color='red')
+        ax9.set_title('Integrated Time Course')
+        ax9.grid(True, alpha=0.3)
+        
+        # Add legend
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax9.legend(lines, labels, loc='upper right')
+        
+        plt.suptitle(f'Integrated Opioid-Brain Reward Model: {scenario.value.upper()}', 
+                    fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.show()
+        
+        # Print integration summary
+        self._print_integration_summary(results)
+    
+    def _print_integration_summary(self, results: Dict):
+        """Print summary of integrated results"""
+        scenario = results['scenario']
+        metrics = results['integration_metrics']
+        
+        print(f"\n{'='*60}")
+        print(f"INTEGRATED MODEL SUMMARY: {scenario.value.upper()}")
+        print(f"{'='*60}")
+        
+        print(f"\nBiophysical Layer:")
+        print(f"  VTA firing rate change: {metrics['vta_firing_change']:+.1f} Hz")
+        print(f"  GABA firing rate change: {metrics['gaba_firing_change']:+.1f} Hz")
+        
+        print(f"\nRL Processing Layer:")
+        print(f"  Average dopamine level: {metrics['avg_dopamine_level']:.3f}")
+        print(f"  Average RPE: {metrics['avg_rpe']:+.3f}")
+        print(f"  RPE variance: {metrics['rpe_variance']:.3f}")
+        
+        print(f"\nIntegration Analysis:")
+        print(f"  Dopamine-RPE correlation: {metrics['dopamine_rpe_correlation']:.3f}")
+        
+        if metrics['dopamine_rpe_correlation'] > 0.3:
+            print("  ✅ Strong positive dopamine-RPE coupling")
+        elif metrics['dopamine_rpe_correlation'] > 0.1:
+            print("  ⚠️  Moderate dopamine-RPE coupling")
+        else:
+            print("  ❌ Weak dopamine-RPE coupling")
+        
+        print(f"\nInterpretation:")
+        if scenario == OpioidScenario.NO_OPIOID:
+            print("  Normal reward processing baseline")
+        elif scenario in [OpioidScenario.LOW_DOSE, OpioidScenario.MODERATE_DOSE]:
+            print("  Enhanced dopamine → Increased reward expectation → Altered RPE")
+        elif scenario in [OpioidScenario.HIGH_DOSE, OpioidScenario.CHRONIC_EXPOSURE]:
+            print("  Strong dopamine enhancement → Significantly altered reward processing")
+
+    def run_comparative_analysis(self):
+        """Run comparative analysis across all opioid scenarios"""
+        print("\n" + "="*60)
+        print("COMPARATIVE ANALYSIS ACROSS OPIOID SCENARIOS")
+        print("="*60)
+        
+        scenarios = list(OpioidScenario)
+        
+        # Run all scenarios
+        for scenario in scenarios:
+            self.run_integrated_simulation(scenario, num_rl_steps=100)
+        
+        # Plot comparative analysis
+        self._plot_comparative_analysis()
+        
+        return self.integrated_results
+    
+    def _plot_comparative_analysis(self):
+        """Plot comparative analysis across scenarios"""
+        scenarios = list(self.integrated_results.keys())
+        scenario_names = [s.value.replace('_', ' ').title() for s in scenarios]
+        
+        # Extract metrics for comparison
+        vta_responses = [self.integrated_results[s]['integration_metrics']['vta_firing_change'] 
+                        for s in scenarios]
+        avg_rpes = [self.integrated_results[s]['integration_metrics']['avg_rpe'] 
+                   for s in scenarios]
+        dopamine_levels = [self.integrated_results[s]['integration_metrics']['avg_dopamine_level'] 
+                          for s in scenarios]
+        correlations = [self.integrated_results[s]['integration_metrics']['dopamine_rpe_correlation'] 
+                       for s in scenarios]
+        
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # VTA Response
+        axes[0, 0].bar(scenario_names, vta_responses, color='red', alpha=0.7)
+        axes[0, 0].set_title('VTA Dopamine Response to Opioids')
+        axes[0, 0].set_ylabel('Firing Rate Change (Hz)')
+        axes[0, 0].tick_params(axis='x', rotation=45)
+        axes[0, 0].grid(True, alpha=0.3, axis='y')
+        
+        # Average RPE
+        axes[0, 1].bar(scenario_names, avg_rpes, color='orange', alpha=0.7)
+        axes[0, 1].set_title('Average Reward Prediction Error')
+        axes[0, 1].set_ylabel('Average RPE')
+        axes[0, 1].tick_params(axis='x', rotation=45)
+        axes[0, 1].grid(True, alpha=0.3, axis='y')
+        axes[0, 1].axhline(0, color='black', linestyle='--', alpha=0.5)
+        
+        # Dopamine Levels
+        axes[1, 0].bar(scenario_names, dopamine_levels, color='purple', alpha=0.7)
+        axes[1, 0].set_title('Average Dopamine Levels')
+        axes[1, 0].set_ylabel('Dopamine Level')
+        axes[1, 0].tick_params(axis='x', rotation=45)
+        axes[1, 0].grid(True, alpha=0.3, axis='y')
+        
+        # Dopamine-RPE Correlations
+        axes[1, 1].bar(scenario_names, correlations, color='blue', alpha=0.7)
+        axes[1, 1].set_title('Dopamine-RPE Correlations')
+        axes[1, 1].set_ylabel('Correlation Coefficient')
+        axes[1, 1].tick_params(axis='x', rotation=45)
+        axes[1, 1].grid(True, alpha=0.3, axis='y')
+        axes[1, 1].axhline(0, color='black', linestyle='--', alpha=0.5)
+        
+        plt.suptitle('Comparative Analysis: Opioid Effects on Reward Processing', 
+                    fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.show()
+
+# ==================== BIOPHYSICAL MODEL CLASSES ====================
+
+class BiophysicalMORSimulation:
+    """Simplified version of the original MOR simulation focused on dopamine output"""
+    
+    def __init__(self, mor_sensitivity=1.0):
+        self.mor_sensitivity = mor_sensitivity
+        self.neurons = {}
+        self.synapses = {}
+        self.stimulators = {}
+        self.recordings = {}
+        self.netcons = {}
+        
+    def create_neurons(self):
+        """Create VTA dopamine neuron and GABA interneuron"""
+        
+        # VTA dopamine neuron
+        self.neurons['vta_da'] = h.Section(name='vta_dopamine')
+        self.neurons['vta_da'].L = 25
+        self.neurons['vta_da'].diam = 25
+        self.neurons['vta_da'].Ra = 100
+        self.neurons['vta_da'].cm = 1
+        self.neurons['vta_da'].insert('hh')
+        self.neurons['vta_da'].gnabar_hh = 0.12
+        self.neurons['vta_da'].gkbar_hh = 0.036
+        self.neurons['vta_da'].gl_hh = 0.0003
+        self.neurons['vta_da'].el_hh = -54.3
+        
+        # GABA interneuron
+        self.neurons['gaba'] = h.Section(name='gaba_interneuron')
+        self.neurons['gaba'].L = 15
+        self.neurons['gaba'].diam = 15
+        self.neurons['gaba'].Ra = 100
+        self.neurons['gaba'].cm = 1
+        self.neurons['gaba'].insert('hh')
+        self.neurons['gaba'].gnabar_hh = 0.15
+        self.neurons['gaba'].gkbar_hh = 0.03
+        self.neurons['gaba'].gl_hh = 0.0005
+        self.neurons['gaba'].el_hh = -50
+        
+    def create_connections(self, opioid_dose=0.0):
+        """Create neural connections and opioid effects"""
+        
+        # GABA stimulation
+        gaba_exc_syn = h.ExpSyn(self.neurons['gaba'](0.5))
+        gaba_exc_syn.tau = 2
+        gaba_exc_syn.e = 0
+        
+        gaba_stim = h.NetStim()
+        gaba_stim.number = 1000
+        gaba_stim.start = 10
+        gaba_stim.interval = 5
+        gaba_stim.noise = 0.3
+        
+        gaba_netcon = h.NetCon(gaba_stim, gaba_exc_syn)
+        gaba_netcon.delay = 1
+        gaba_netcon.weight[0] = 0.8
+        
+        self.synapses['stim_to_gaba'] = gaba_exc_syn
+        self.stimulators['gaba_stim'] = gaba_stim
+        self.netcons['gaba_stim'] = gaba_netcon
+        
+        # GABA to DA inhibition
+        gaba_syn = h.ExpSyn(self.neurons['vta_da'](0.5))
+        gaba_syn.tau = 8
+        gaba_syn.e = -80
+        
+        gaba_to_da_netcon = h.NetCon(self.neurons['gaba'](0.5)._ref_v, gaba_syn, 
+                                    sec=self.neurons['gaba'])
+        gaba_to_da_netcon.threshold = -20
+        gaba_to_da_netcon.delay = 2
+        gaba_to_da_netcon.weight[0] = 3.0
+        
+        self.synapses['gaba_to_da'] = gaba_syn
+        self.netcons['gaba_to_da'] = gaba_to_da_netcon
+        
+        # MOR mechanism (opioid effect)
+        if opioid_dose > 0:
+            mor_syn = h.ExpSyn(self.neurons['gaba'](0.5))
+            mor_syn.tau = 20
+            mor_syn.e = -90
+            
+            mor_stim = h.NetStim()
+            mor_stim.number = int(50 * opioid_dose * self.mor_sensitivity)
+            mor_stim.start = 200
+            mor_stim.interval = max(2, 8 / (opioid_dose * self.mor_sensitivity))
+            mor_stim.noise = 0.2
+            
+            mor_netcon = h.NetCon(mor_stim, mor_syn)
+            mor_netcon.delay = 1
+            mor_netcon.weight[0] = opioid_dose * self.mor_sensitivity * 2.0
+            
+            self.synapses['mor_to_gaba'] = mor_syn
+            self.stimulators['mor'] = mor_stim
+            self.netcons['mor_to_gaba'] = mor_netcon
+        
+        # VTA baseline stimulation
+        baseline_syn = h.ExpSyn(self.neurons['vta_da'](0.5))
+        baseline_syn.tau = 3
+        baseline_syn.e = 0
+        
+        baseline_stim = h.NetStim()
+        baseline_stim.number = 100
+        baseline_stim.start = 50
+        baseline_stim.interval = 20
+        baseline_stim.noise = 0.5
+        
+        baseline_netcon = h.NetCon(baseline_stim, baseline_syn)
+        baseline_netcon.delay = 1
+        baseline_netcon.weight[0] = 1.5
+        
+        self.stimulators['vta_baseline'] = baseline_stim
+        self.synapses['baseline_to_vta'] = baseline_syn
+        self.netcons['baseline_to_vta'] = baseline_netcon
+    
+    def setup_recording(self):
+        """Setup recording of neural activity"""
+        self.recordings['time'] = h.Vector().record(h._ref_t)
+        self.recordings['vta_da_v'] = h.Vector().record(self.neurons['vta_da'](0.5)._ref_v)
+        self.recordings['gaba_v'] = h.Vector().record(self.neurons['gaba'](0.5)._ref_v)
+        
+        # Spike detection
+        self.recordings['vta_spikes'] = h.Vector()
+        self.recordings['gaba_spikes'] = h.Vector()
+        
+        self.vta_spike_detector = h.NetCon(self.neurons['vta_da'](0.5)._ref_v, None, 
+                                          sec=self.neurons['vta_da'])
+        self.vta_spike_detector.threshold = -20
+        self.vta_spike_detector.record(self.recordings['vta_spikes'])
+        
+        self.gaba_spike_detector = h.NetCon(self.neurons['gaba'](0.5)._ref_v, None, 
+                                           sec=self.neurons['gaba'])
+        self.gaba_spike_detector.threshold = -20
+        self.gaba_spike_detector.record(self.recordings['gaba_spikes'])
+    
+    def run_simulation(self, opioid_dose=0.0, duration=500):
+        """Run the biophysical simulation"""
+        
+        # Create network
+        self.create_neurons()
+        self.create_connections(opioid_dose)
+        self.setup_recording()
+        
+        # Run simulation
+        h.finitialize(-65 * mV)
+        h.continuerun(duration * ms)
+        
+        # Analyze results
+        return self.analyze_results(opioid_dose)
+    
+    def analyze_results(self, opioid_dose):
+        """Analyze simulation results"""
+        
+        # Convert to numpy arrays
+        t = np.array(self.recordings['time'])
+        vta_v = np.array(self.recordings['vta_da_v'])
+        gaba_v = np.array(self.recordings['gaba_v'])
+        
+        vta_spikes = np.array(self.recordings['vta_spikes']) if len(self.recordings['vta_spikes']) > 0 else np.array([])
+        gaba_spikes = np.array(self.recordings['gaba_spikes']) if len(self.recordings['gaba_spikes']) > 0 else np.array([])
+        
+        # Calculate firing rates
+        baseline_vta = vta_spikes[vta_spikes <= 200] if len(vta_spikes) > 0 else np.array([])
+        opioid_vta = vta_spikes[vta_spikes > 200] if len(vta_spikes) > 0 else np.array([])
+        
+        baseline_gaba = gaba_spikes[gaba_spikes <= 200] if len(gaba_spikes) > 0 else np.array([])
+        opioid_gaba = gaba_spikes[gaba_spikes > 200] if len(gaba_spikes) > 0 else np.array([])
+        
+        # Convert to Hz
+        baseline_vta_rate = len(baseline_vta) / 0.2
+        opioid_vta_rate = len(opioid_vta) / 0.3
+        baseline_gaba_rate = len(baseline_gaba) / 0.2
+        opioid_gaba_rate = len(opioid_gaba) / 0.3
+        
+        vta_response = opioid_vta_rate - baseline_vta_rate
+        gaba_response = opioid_gaba_rate - baseline_gaba_rate
+        
+        return {
+            'opioid_dose': opioid_dose,
+            'baseline_vta_rate': baseline_vta_rate,
+            'opioid_vta_rate': opioid_vta_rate,
+            'baseline_gaba_rate': baseline_gaba_rate,
+            'opioid_gaba_rate': opioid_gaba_rate,
+            'vta_response': vta_response,
+            'gaba_response': gaba_response,
+            'time': t,
+            'vta_voltage': vta_v,
+            'gaba_voltage': gaba_v,
+            'vta_spikes': vta_spikes,
+            'gaba_spikes': gaba_spikes
+        }
+
+# ==================== RL MODEL CLASSES ====================
+
+class DopamineCenteredRPE(nn.Module):
+    def __init__(self, state_dim: int = 8):
+        super().__init__()
+        self.state_dim = state_dim
+        # Expectation network (predicts expected rewards based on dopamine)
+        self.expectation_network = nn.Sequential(
+            nn.Linear(1, 16),
+            nn.ReLU(),
+            nn.Linear(16, 8),
+            nn.ReLU(),
+            nn.Linear(8, 1)
+        )
+        # Dopamine modulation network
+        self.dopamine_modulator = nn.Sequential(
+            nn.Linear(1, 16),  # Dopamine level input
+            nn.ReLU(),
+            nn.Linear(16, 8), 
+            nn.ReLU(),
+            nn.Linear(8, 1) 
+        )
+        
+    def compute_rpe(self, dopamine_level: float, actual_reward: float) -> Tuple[float, float]:
+        # Expected reward based on dopamine (learned function)
+        dopamine_tensor = torch.tensor([[dopamine_level]], dtype=torch.float32)
+        expected_reward = self.expectation_network(dopamine_tensor).item()
+        # RPE: actual reward - expected reward
+        rpe = actual_reward - expected_reward
+        return rpe, expected_reward
+
+class DopamineCenteredProcessor:
+    def __init__(self, state_dim: int = 8):
+        self.rpe_computer = DopamineCenteredRPE(state_dim)
+        self.state_dim = state_dim
+        # Processing history - track all components
+        self.actual_rewards = []
+        self.expected_rewards = []
+        self.rpe_history = []
+        self.dopamine_history = []
+        
+    def generate_rewards_from_dopamine(self, dopamine_level: float, step: int) -> Tuple[float, float]:
+        """Generate actual and expected rewards based on dopamine level"""
+        
+        # Generate actual reward from environment - with slight oscillation
+        base_reward = 0.5
+        oscillation = 0.05 * np.sin(step * 0.2)  # Small oscillation
+        actual_reward = base_reward + oscillation
+        
+        # Generate expected reward based on dopamine level (dopamine affects predictions)
+        if dopamine_level > 0.7:  # High dopamine → very optimistic predictions
+            expected_reward = actual_reward * 4.0 + 3.0 + dopamine_level * 4.0
+        elif dopamine_level > 0.4:  # Medium dopamine → realistic predictions
+            expected_reward = actual_reward * 2.7 + 1.0 + dopamine_level * 2.5
+        elif dopamine_level > 0.2:  # Low dopamine → pessimistic predictions
+            expected_reward = actual_reward * 0.8 - 1.5 + dopamine_level * 1.0  
+        else:  # Very low dopamine → very pessimistic predictions
+            expected_reward = actual_reward * 0.2 - 3.0 + dopamine_level * 0.5 
+        
+        return actual_reward, expected_reward
+    
+    def run_biophysical_dopamine_experiment(self, dopamine_signal: np.ndarray, num_steps: int) -> List[Dict]:
+        """Run RL experiment using biophysical dopamine signal"""
+        
+        experiment_results = []
+        
+        # Reset history
+        self.actual_rewards = []
+        self.expected_rewards = []
+        self.rpe_history = []
+        self.dopamine_history = []
+        
+        # Sample dopamine signal to match RL steps
+        dopamine_sampled = np.interp(
+            np.linspace(0, len(dopamine_signal)-1, num_steps),
+            np.arange(len(dopamine_signal)),
+            dopamine_signal
+        )
+        
+        for step in range(num_steps):
+            dopamine_level = dopamine_sampled[step]
+            
+            # Generate rewards based on current dopamine level
+            actual_reward, expected_reward = self.generate_rewards_from_dopamine(dopamine_level, step)
+            
+            # Compute RPE
+            rpe, expected_reward_nn = self.rpe_computer.compute_rpe(dopamine_level, actual_reward)
+            
+            # Record history
+            self.actual_rewards.append(actual_reward)
+            self.expected_rewards.append(expected_reward_nn)
+            self.rpe_history.append(rpe)
+            self.dopamine_history.append(dopamine_level)
+            
+            result = {
+                'actual_reward': actual_reward,
+                'expected_reward': expected_reward_nn,
+                'rpe': rpe,
+                'dopamine_level': dopamine_level
+            }
+            experiment_results.append(result)
+        
+        return experiment_results
+
+def run_integrated_experiments():
+    """Main function to run integrated experiments"""
+    print("="*60)
+    print("INTEGRATED OPIOID-BRAIN REWARD CIRCUIT MODEL")
+    print("="*60)
+    
+    # Initialize integrated model
+    integrated_model = IntegratedOpioidModel(mor_sensitivity=1.0)
+    
+    # Run comparative analysis across all scenarios
+    results = integrated_model.run_comparative_analysis()
+    
+    # Plot detailed results for key scenarios
+    key_scenarios = [OpioidScenario.NO_OPIOID, OpioidScenario.MODERATE_DOSE, OpioidScenario.HIGH_DOSE]
+    
+    for scenario in key_scenarios:
+        print(f"\nPlotting detailed results for {scenario.value}...")
+        integrated_model.plot_integrated_results(scenario)
+    
+    return results
+
+if __name__ == "__main__":
+    # Run integrated experiments
+    results = run_integrated_experiments()

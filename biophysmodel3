@@ -1,0 +1,101 @@
+
+from neuron import h
+import matplotlib.pyplot as plt
+import numpy as np
+from neuron.units import ms, mV
+
+# Initialize NEURON
+h.load_file('stdrun.hoc')
+np.random.seed(42)
+
+def plot_results(self, results):
+    """Plot the simulation results"""
+    
+    fig, axes = plt.subplots(4, 1, figsize=(14, 12))
+    
+    t = results['time']
+    vta_v = results['vta_voltage']
+    gaba_v = results['gaba_voltage']
+    vta_spikes = results['vta_spikes']
+    gaba_spikes = results['gaba_spikes']
+    
+    # Plot VTA dopamine neuron voltage
+    axes[0].plot(t, vta_v, 'r-', linewidth=1.5, label='VTA Dopamine Neuron')
+    axes[0].axhline(-20, color='gray', linestyle='--', alpha=0.7, label='Spike Threshold')
+    axes[0].axvline(200, color='purple', linestyle=':', linewidth=2, alpha=0.8, label='Opioid Onset')
+    
+    # Plot VTA spikes
+    if len(vta_spikes) > 0:
+        spike_heights = np.ones_like(vta_spikes) * 30
+        axes[0].scatter(vta_spikes, spike_heights, color='red', s=30, alpha=0.8, marker='v')
+    
+    axes[0].set_ylabel('VTA Voltage (mV)')
+    axes[0].set_title(f'MOR Simulation: Dose {results["opioid_dose"]}x, Sensitivity {results["mor_sensitivity"]}x')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim(-80, 40)
+    
+    # Plot GABA interneuron voltage
+    axes[1].plot(t, gaba_v, 'orange', linewidth=1.5, label='GABA Interneuron')
+    axes[1].axhline(-20, color='gray', linestyle='--', alpha=0.7)
+    axes[1].axvline(200, color='purple', linestyle=':', linewidth=2, alpha=0.8)
+    
+    # Plot GABA spikes
+    if len(gaba_spikes) > 0:
+        spike_heights = np.ones_like(gaba_spikes) * 30
+        axes[1].scatter(gaba_spikes, spike_heights, color='orange', s=30, alpha=0.8, marker='v')
+    
+    axes[1].set_ylabel('GABA Voltage (mV)')
+    axes[1].set_title('GABA Interneuron (MOR Target)')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_ylim(-80, 40)
+    
+    # Plot synaptic currents
+    if 'gaba_current' in self.recordings:
+        gaba_i = np.array(self.recordings['gaba_current'])
+        axes[2].plot(t, gaba_i, 'blue', linewidth=1.5, label='GABA → VTA Inhibition')
+    
+    if 'mor_current' in self.recordings:
+        mor_i = np.array(self.recordings['mor_current'])
+        axes[2].plot(t, mor_i, 'purple', linewidth=1.5, label='MOR → GABA Inhibition')
+    
+    axes[2].axvline(200, color='purple', linestyle=':', linewidth=2, alpha=0.8)
+    axes[2].set_ylabel('Current (nA)')
+    axes[2].set_title('Synaptic Currents: MOR Mechanism')
+    axes[2].legend()
+    axes[2].grid(True, alpha=0.3)
+    
+    # Plot firing rates over time
+    baseline_period = (t >= 50) & (t <= 200)
+    opioid_period = (t >= 200) & (t <= 500)
+    
+    time_bins = np.arange(0, 500, 25)  # 25ms bins
+    vta_rate_bins = []
+    gaba_rate_bins = []
+    
+    for i in range(len(time_bins)-1):
+        start, end = time_bins[i], time_bins[i+1]
+        vta_count = np.sum((vta_spikes >= start) & (vta_spikes < end))
+        gaba_count = np.sum((gaba_spikes >= start) & (gaba_spikes < end))
+        vta_rate_bins.append(vta_count / 0.025)  # Convert to Hz
+        gaba_rate_bins.append(gaba_count / 0.025)
+    
+    bin_centers = time_bins[:-1] + 12.5
+    axes[3].plot(bin_centers, vta_rate_bins, 'r-', linewidth=2, label=f'VTA Dopamine ({results["vta_response"]:+.1f} Hz)')
+    axes[3].plot(bin_centers, gaba_rate_bins, 'orange', linewidth=2, label=f'GABA ({results["gaba_response"]:+.1f} Hz)')
+    axes[3].axvline(200, color='purple', linestyle=':', linewidth=2, alpha=0.8)
+    axes[3].set_xlabel('Time (ms)')
+    axes[3].set_ylabel('Firing Rate (Hz)')
+    axes[3].set_title('Neural Activity Over Time')
+    axes[3].legend()
+    axes[3].grid(True, alpha=0.3)
+    
+    # Add annotations
+    axes[0].text(100, 30, 'BASELINE\n(GABA inhibits VTA)', ha='center', fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.7))
+    axes[0].text(350, 30, 'OPIOID EFFECT\n(MOR inhibits GABA\n→ VTA disinhibited)', ha='center', fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral", alpha=0.7))
+    
+    plt.tight_layout()
+    plt.show()
