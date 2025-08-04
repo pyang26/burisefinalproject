@@ -139,7 +139,7 @@ spike_detector = h.NetCon(vta(0.5)._ref_v, None, sec=vta)
 spike_detector.threshold = -20
 spike_detector.record(spikes)
 
-# === Run Simulation (First pass, no feedback) ===
+    # === Run Simulation (First pass, no feedback) ===
 h.finitialize(-65 * mV)
 h.continuerun(1000 * ms)
 
@@ -162,7 +162,7 @@ min_burst_spikes = 3
 
 for i in range(len(spikes_np) - min_burst_spikes + 1):
    if spikes_np[i + min_burst_spikes - 1] - spikes_np[i] <= burst_window_ms:
-       burst_spikes.extend(spikes_np[i:i + min_burst_spikes])
+      burst_spikes.extend(spikes_np[i:i + min_burst_spikes])
 
 burst_spikes = np.unique(np.array(burst_spikes))
 tonic_spikes = np.setdiff1d(spikes_np, burst_spikes)
@@ -185,10 +185,10 @@ tonic_idx = np.searchsorted(t_np, tonic_spikes)
 
 for idx in burst_idx:
    if idx < len(syn_da):
-       syn_da[idx] += release_burst
+      syn_da[idx] += release_burst
 for idx in tonic_idx:
    if idx < len(syn_da):
-       syn_da[idx] += release_tonic
+      syn_da[idx] += release_tonic
 
 # Dynamics Loop
 for i in range(1, len(t_np)):
@@ -210,12 +210,12 @@ girk_mod = []
 
 for da_val in extra_da:
    if da_val > 3.0:
-       inhib = min(1.0, (da_val - 3.0) / 5.0)
-       gpas_mod.append(gpas_base * (1 - 0.5 * inhib))
-       girk_mod.append(girk_base * (1 + 2 * inhib))
+      inhib = min(1.0, (da_val - 3.0) / 5.0)
+      gpas_mod.append(gpas_base * (1 - 0.5 * inhib))
+      girk_mod.append(girk_base * (1 + 2 * inhib))
    else:
-       gpas_mod.append(gpas_base)
-       girk_mod.append(girk_base)
+      gpas_mod.append(gpas_base)
+      girk_mod.append(girk_base)
 
 # === Apply Feedback ===
 gpas_vec = h.Vector(gpas_mod)
@@ -260,3 +260,15 @@ plt.legend(); plt.grid(True)
 
 plt.tight_layout()
 plt.show()
+
+# Function to get dopamine data for integration
+def get_dopamine_data():
+    """Return the dopamine data from the biophysical simulation for integration."""
+    # This function should be called after the simulation has run
+    return {
+        'time': t_np,
+        'synaptic_da': syn_da,
+        'extrasynaptic_da': extra_da,
+        'total_da': syn_da + extra_da,
+        'opioid_active': [1.0 if 200 <= t <= 400 else 0.0 for t in t_np]
+    }
