@@ -103,19 +103,17 @@ class DopamineCenteredProcessor:
             actual_reward = 0.3
 
         # Based on sigmoidal response curve from dopamine to expected reward
-        # E(R) = R_max * (DA^n / (K^n + DA^n)) where DA = dopamine level
         R_max = actual_reward * 4.0  # Increased maximum expected reward
         K = 0.3  # Lower half-saturation constant (more sensitive to dopamine)
         n = 3.0  # Higher Hill coefficient (steeper response)
         
         # Enhanced sigmoidal dopamine response: E(R) = R_max * (DA^n / (K^n + DA^n))
+        # need sigmoidal response to minimize rpe (error)
         dopamine_response = (dopamine_input.level ** n) / (K ** n + dopamine_input.level ** n)
         base_expected = R_max * dopamine_response
         
         # Temporal difference RPE calculation with dopamine modulation
         # δt = rt + γV(St+1) - V(St)
-        
-        # Calculate temporal difference RPE
         td_rpe = actual_reward + self.gamma * self.next_state_value - self.current_state_value
         
         # Dopamine modulates the RPE calculation
@@ -284,11 +282,6 @@ class DopamineCenteredProcessor:
         print(f"   Average negative RPE: {np.mean(negative_rpe) if negative_rpe else 0:.3f}")
 
 def run_dopamine_centered_experiments():
-    print("="*60)
-    print("DOPAMINE-CENTERED REWARD PROCESSING")
-    print("="*60)
-    
-    # Define dopamine scenarios
     scenarios = [
         DopamineScenario.HIGH_DOPAMINE,
         DopamineScenario.LOW_DOPAMINE,
@@ -300,9 +293,7 @@ def run_dopamine_centered_experiments():
     for scenario in scenarios:
         # Create new processor for each scenario
         processor = DopamineCenteredProcessor(state_dim=8)
-        # Run experiment with dopamine as ONLY input
         results = processor.run_dopamine_experiment(scenario, num_steps=500)
-        # Plot dopamine correlation analysis
         processor.plot_dopamine_correlation_analysis(scenario)
 
 if __name__ == "__main__":
