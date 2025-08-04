@@ -147,10 +147,25 @@ class IntegratedOpioidRewardModel:
             # Set random seed for deterministic state transitions
             np.random.seed(42 + i)  # Different seed for each step but deterministic
             
-            # Ensure the RL model's actual reward matches the step (changes at step 250)
-            # The RL model expects step to determine actual reward
-            dopamine_input.timestamp = i  # Ensure timestamp matches step
-            result = self.reward_processor.process_dopamine_step(dopamine_input)
+            # Create opioid-based actual reward
+            # Higher opioid levels = higher actual reward
+            base_reward = 0.3  # Base reward without opioids
+            # Scale opioid level to reasonable range (0-1) for reward calculation
+            scaled_opioid = np.clip(opioid_level / 20.0, 0.0, 1.0)  # Scale down high opioid levels
+            opioid_reward_boost = scaled_opioid * 0.7  # Opioids increase actual reward
+            actual_reward = base_reward + opioid_reward_boost
+            
+            # Create custom reward data for the RL model
+            from model import RewardData
+            reward_data = RewardData(
+                actual_reward=actual_reward,
+                expected_reward=0.0,  # Will be calculated by RL model
+                timestamp=i
+            )
+            
+            # Process with custom reward data
+            # We need to bypass the RL model's reward generation and use our opioid-based reward
+            result = self._process_with_custom_reward(dopamine_input, reward_data)
             reward_results.append(result)
             
             # Store integrated data
@@ -163,6 +178,37 @@ class IntegratedOpioidRewardModel:
             if i % 200 == 0:
                 print(f"Step {i}: DA={normalized_da:.3f}, Opioid={opioid_level:.3f}, Actual={result['actual_reward']:.3f}, Expected={result['expected_reward']:.3f}, RPE={result['rpe']:.3f}")
         return reward_results
+    
+    def _process_with_custom_reward(self, dopamine_input, reward_data):
+        # Generate expected reward from dopamine input
+        expected_reward_data = self.reward_processor.generate_rewards_from_dopamine(dopamine_input, dopamine_input.timestamp, self.reward_processor.rpe_history)
+        # Update next state value (simulate environment transition)
+        self.reward_processor.next_state_value = self.reward_processor.current_state_value + np.random.normal(0, 0.1)
+        # Compute temporal difference RPE with dopamine modulation
+        td_rpe = reward_data.actual_reward + self.reward_processor.gamma * self.reward_processor.next_state_value - self.reward_processor.current_state_value
+        dopamine_modulation = 1.0 + dopamine_input.level * 0.5
+        modulated_td_rpe = td_rpe * dopamine_modulation
+        
+        # Update state value using temporal difference learning
+        self.reward_processor.current_state_value = self.reward_processor.current_state_value + self.reward_processor.eta * modulated_td_rpe
+        
+        # Use temporal difference RPE as the main RPE
+        rpe = modulated_td_rpe
+        expected_reward = expected_reward_data.expected_reward
+        
+        # Record history
+        self.reward_processor.actual_rewards.append(reward_data.actual_reward)
+        self.reward_processor.expected_rewards.append(expected_reward)
+        self.reward_processor.rpe_history.append(rpe)
+        self.reward_processor.dopamine_history.append(dopamine_input.level)
+        self.reward_processor.state_values.append(self.reward_processor.current_state_value)
+        
+        return {
+            'actual_reward': reward_data.actual_reward,
+            'expected_reward': expected_reward,
+            'rpe': rpe,
+            'dopamine_level': dopamine_input.level
+        }
     
     def run_integrated_simulation(self):
         print("=== INTEGRATED OPIOID-DOPAMINE-REWARD SIMULATION ===")
