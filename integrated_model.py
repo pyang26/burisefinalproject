@@ -25,7 +25,7 @@ class IntegratedOpioidRewardModel:
         
     def run_biophysical_simulation(self):
         """Run the biophysical model to get dopamine output."""
-        print("Running biophysical simulation...")
+        print("Running biophysical simulation with 1000 neurons...")
         
         # Import the biophysical model's dopamine calculation directly
         # This simulates the exact same calculation as biophysmodel.py
@@ -76,15 +76,21 @@ class IntegratedOpioidRewardModel:
             
             opioid_active.append(cumulative_opioid)
             
-            # Continuous dopamine release during opioid administration
-            # Dopamine builds up gradually during opioid presence
-            if cumulative_opioid > 0:
-                # Dopamine release proportional to cumulative opioid level
-                # More opioids in system = more dopamine release
-                release_amount = 0.001 * opioid_multiplier * cumulative_opioid  # Proportional to opioid level
+            # Simulate dopamine release from 1000 neurons, where each neuron contributes to total dopamine release
+            total_release = 0.0
+            
+            for neuron in range(1000):  # Simulate 1000 neurons
+                # Each neuron has slightly different sensitivity to opioids
+                neuron_sensitivity = 0.8 + 0.4 * np.random.random()  # 0.8-1.2 range
                 
-                # Add continuous release to synaptic dopamine
-                syn_da[i] += release_amount
+                # Continuous dopamine release during opioid administration
+                if cumulative_opioid > 0:
+                    # Individual neuron release (scaled down for 1000 neurons)
+                    neuron_release = 0.000001 * opioid_multiplier * cumulative_opioid * neuron_sensitivity
+                    total_release += neuron_release
+            
+            # Add total release from all neurons to synaptic dopamine
+            syn_da[i] += total_release
         
         # Convert spikes to arrays (like biophysical model)
         spikes_np = np.array(spikes)
@@ -246,7 +252,8 @@ class IntegratedOpioidRewardModel:
         # 2. Dopamine response to opioids
         ax2 = plt.subplot(4, 2, 2)
         ax2.plot(time_points, dopamine_levels, 'purple', linewidth=3)
-        ax2.axvspan(self.opioid_start_time, self.opioid_end_time, color='red', alpha=0.2)
+        ax2.axvspan(200, 325, color='red', alpha=0.2)
+        ax2.axvspan(550, 675, color='red', alpha=0.2)
         ax2.set_title('Dopamine Response to Opioids', fontweight='bold')
         ax2.set_xlabel('Time (ms)')
         ax2.set_ylabel('Dopamine Level (a.u.)')
@@ -256,7 +263,8 @@ class IntegratedOpioidRewardModel:
         ax3 = plt.subplot(4, 2, 3)
         ax3.plot(time_points, actual_rewards, 'g-', linewidth=2, label='Actual Reward')
         ax3.plot(time_points, expected_rewards, 'b--', linewidth=2, label='Expected Reward')
-        ax3.axvspan(self.opioid_start_time, self.opioid_end_time, color='red', alpha=0.2)
+        ax3.axvspan(200, 325, color='red', alpha=0.2)
+        ax3.axvspan(550, 675, color='red', alpha=0.2)
         ax3.set_title('Reinforcement Learning: TD Reward Processing', fontweight='bold')
         ax3.set_xlabel('Time (ms)')
         ax3.set_ylabel('Reward Value (a.u.)')
@@ -266,7 +274,8 @@ class IntegratedOpioidRewardModel:
         # 4. RPE over time
         ax4 = plt.subplot(4, 2, 4)
         ax4.plot(time_points, rpe_values, 'r-', linewidth=2)
-        ax4.axvspan(self.opioid_start_time, self.opioid_end_time, color='red', alpha=0.2)
+        ax4.axvspan(200, 325, color='red', alpha=0.2)
+        ax4.axvspan(550, 675, color='red', alpha=0.2)
         ax4.axhline(y=0, color='k', linestyle='--', alpha=0.5)
         ax4.set_title('TD Learning: Reward Prediction Error', fontweight='bold')
         ax4.set_xlabel('Time (ms)')
