@@ -24,11 +24,15 @@ def create_vta_neuron():
    soma.L = soma.diam = 22
    soma.cm = 1.2
    soma.Ra = 150
-   soma.insert('pas')
-   soma.g_pas = 5e-5
-   soma.e_pas = -67 + random.uniform(-1.5, 1.5)
-   soma.insert('girk')
-   soma.gk_girk_girk = 5e-5
+   soma.insert('hh')  # Hodgkin-Huxley for proper action potentials
+   soma.v = -67 + random.uniform(-1.5, 1.5)
+   soma.gnabar_hh = 2.0   # Extreme sodium conductance
+   soma.gkbar_hh = 0.5    # High potassium conductance
+   soma.gl_hh = 0.0000001 
+   soma.el_hh = -54.3    
+   # Temporarily remove GIRK to test action potential amplitude
+   # soma.insert('girk')
+   # soma.gk_girk_girk = 1e-6 
    return soma
 
 
@@ -86,10 +90,10 @@ for _ in range(NUM_VTA):
 
 
    baseline_stim = h.NetStim()
-   baseline_stim.number = 20
-   baseline_stim.start = 180
-   baseline_stim.interval = 15
-   baseline_stim.noise = 0.5
+   baseline_stim.number = 15
+   baseline_stim.start = 200
+   baseline_stim.interval = 10
+   baseline_stim.noise = 0.2
 
 
    exc_syn = h.ExpSyn(vta(0.5))
@@ -99,8 +103,19 @@ for _ in range(NUM_VTA):
 
    baseline_nc = h.NetCon(baseline_stim, exc_syn)
    baseline_nc.delay = 1
-   baseline_nc.weight[0] = 0.6
+   baseline_nc.weight[0] = 1.2
    baseline_netcons.append(baseline_nc)
+   
+   # Add stimulation for second opioid period
+   second_stim = h.NetStim()
+   second_stim.number = 12
+   second_stim.start = 550
+   second_stim.interval = 12
+   second_stim.noise = 0.2
+   
+   second_nc = h.NetCon(second_stim, exc_syn)
+   second_nc.delay = 1
+   second_nc.weight[0] = 1.0
 
 
    gaba_stim = h.NetStim()
@@ -179,9 +194,9 @@ def deactivate_mor():
 
 cvode = h.CVode()
 cvode.event(200, activate_mor)
-cvode.event(400, deactivate_mor)
-cvode.event(600, activate_mor)  # Second opioid administration (delayed to allow recovery)
-cvode.event(800, deactivate_mor)  # End second administration (600 + 200 = 800)
+cvode.event(325, deactivate_mor)  # End first administration
+cvode.event(550, activate_mor)  # Second opioid administration
+cvode.event(675, deactivate_mor)  # End second administration
 
 
 # === Run Simulation ===
@@ -247,10 +262,10 @@ for i in range(1, len(t_np)):
    extra_da[i] = max(0, prev_extra + extra_da[i] + diffusion - clear_extra_rate * prev_extra * dt)
 
 
-   # D2 Autoreceptor Feedback
-   inhibition = d2_feedback_strength * extra_da[i]
-   for vta in vta_neurons:
-       vta.g_pas = max(1e-6, 5e-5 * (1 - inhibition))
+   # D2 Autoreceptor Feedback (removed since pas mechanism is not used)
+   # inhibition = d2_feedback_strength * extra_da[i]
+   # for vta in vta_neurons:
+   #     vta.g_pas = max(1e-6, 5e-5 * (1 - inhibition))
 
 
 # === Plot ===
@@ -273,18 +288,21 @@ plt.figure(figsize=(14, 8))
 plt.subplot(3, 1, 1)
 plt.plot(t_np, v_vta, label='VTA Vm (sample)', color='blue')
 plt.plot(t_np, v_nac, label='NAc Vm (sample)', color='orange', alpha=0.7)
-plt.axvspan(200, 400, color='red', alpha=0.2, label='MOR active (1st)')
-plt.axvspan(600, 800, color='red', alpha=0.2, label='MOR active (2nd)')
+plt.axvspan(200, 325, color='red', alpha=0.2, label='MOR active (1st)')
+plt.axvspan(550, 675, color='red', alpha=0.2, label='MOR active (2nd)')
 plt.legend(); plt.grid(True); plt.title("Membrane Potentials (Sample Neurons)")
 plt.ylabel("Voltage (mV)")
+plt.xlabel("Time (ms)")
+plt.ylim(-80, 70) 
 
 
 plt.subplot(3, 1, 2)
 plt.plot(t_np, syn_da, label='Synaptic DA', color='purple')
 plt.plot(t_np, extra_da_smooth, label='Extrasynaptic DA', color='green')
-plt.axvspan(200, 400, color='red', alpha=0.2, label='MOR active (1st)')
-plt.axvspan(600, 800, color='red', alpha=0.2, label='MOR active (2nd)')
+plt.axvspan(200, 325, color='red', alpha=0.2, label='MOR active (1st)')
+plt.axvspan(550, 675, color='red', alpha=0.2, label='MOR active (2nd)')
 plt.ylabel("DA Level (a.u.)")
+plt.xlabel("Time (ms)")
 plt.title("Synaptic vs Extrasynaptic Dopamine Pools")
 plt.legend(); plt.grid(True)
 
@@ -297,8 +315,8 @@ elif len(burst_spikes) > 0:
    plt.eventplot([burst_spikes], colors=['red'], lineoffsets=[1.0], linelengths=[0.3])
 elif len(tonic_spikes) > 0:
    plt.eventplot([tonic_spikes], colors=['black'], lineoffsets=[1.0], linelengths=[0.3])
-plt.axvspan(200, 400, color='red', alpha=0.2)
-plt.axvspan(600, 800, color='red', alpha=0.2)
+plt.axvspan(200, 325, color='red', alpha=0.2)
+plt.axvspan(550, 675, color='red', alpha=0.2)
 plt.ylim(0.5, 1.5)
 plt.title("VTA Population Spikes (Burst: red, Tonic: black)")
 plt.xlabel("Time (ms)"); plt.grid(True)
@@ -313,9 +331,9 @@ print(f"Total spikes: {len(all_spikes)}")
 print(f"Burst spikes: {len(burst_spikes)}")
 print(f"Tonic spikes: {len(tonic_spikes)}")
 print(f"Spikes before MOR (0-200ms): {len(all_spikes[all_spikes < 200])}")
-print(f"Spikes during 1st MOR (200-400ms): {len(all_spikes[(all_spikes >= 200) & (all_spikes < 400)])}")
-print(f"Spikes between MOR periods (400-600ms): {len(all_spikes[(all_spikes >= 400) & (all_spikes < 600)])}")
-print(f"Spikes during 2nd MOR (600-800ms): {len(all_spikes[(all_spikes >= 600) & (all_spikes < 800)])}")
-print(f"Spikes after 2nd MOR (800-1000ms): {len(all_spikes[all_spikes >= 800])}")
+print(f"Spikes during 1st MOR (200-325ms): {len(all_spikes[(all_spikes >= 200) & (all_spikes < 325)])}")
+print(f"Spikes between MOR periods (325-550ms): {len(all_spikes[(all_spikes >= 325) & (all_spikes < 550)])}")
+print(f"Spikes during 2nd MOR (550-675ms): {len(all_spikes[(all_spikes >= 550) & (all_spikes < 675)])}")
+print(f"Spikes after 2nd MOR (675-1000ms): {len(all_spikes[all_spikes >= 675])}")
 print(f"All spike times: {sorted(all_spikes)}")
 
