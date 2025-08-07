@@ -269,7 +269,7 @@ def create_combined_visualization(data):
             table_data['Overall Dopamine Output (a.u.)'].append(da_avg)
         else:
             table_data['VTA Firing Rate (Hz)'].append(0)
-            table_data['GABA Inhibition (pA)'].append(0)
+            table_data['GABA Levels (pA)'].append(0)
             table_data['Overall Dopamine Output (a.u.)'].append(0)
             
     # Normalize each metric row independently from 0 to 1

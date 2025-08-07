@@ -252,7 +252,7 @@ def create_combined_visualization(data):
     table_data = {
         'Overall Dopamine Output (a.u.)': [],
         'VTA Firing Rate (Hz)': [],
-        'GABA Inhibition (pA)': []
+        'GABA Levels (pA)': []
     }
 
     # Calculate average values for each state
@@ -263,13 +263,13 @@ def create_combined_visualization(data):
             table_data['VTA Firing Rate (Hz)'].append(firing_rate)
             
             gaba_avg = np.mean(np.abs(i_gaba_np[mask]))
-            table_data['GABA Inhibition (pA)'].append(gaba_avg)
+            table_data['GABA Levels (pA)'].append(gaba_avg)
             
             da_avg = np.mean(syn_da[mask] + extra_da_smooth[mask])
             table_data['Overall Dopamine Output (a.u.)'].append(da_avg)
         else:
             table_data['VTA Firing Rate (Hz)'].append(0)
-            table_data['GABA Inhibition (pA)'].append(0)
+            table_data['GABA Levels (pA)'].append(0)
             table_data['Overall Dopamine Output (a.u.)'].append(0)
             
     # Normalize each metric row independently from 0 to 1
@@ -285,8 +285,8 @@ def create_combined_visualization(data):
         else:
             normalized_matrix[i, :] = 0
 
-    # Invert the GABA Inhibition row: high GABA inhibition = low neural activity (low color value)
-    gaba_row_index = row_keys.index('GABA Inhibition (pA)')
+    # Invert the GABA Levels row: high GABA Levels = low neural activity (low color value)
+    gaba_row_index = row_keys.index('GABA Levels (pA)')
     normalized_matrix[gaba_row_index, :] = 1 - normalized_matrix[gaba_row_index, :]
 
     # Set up the plot for the heatmap table
